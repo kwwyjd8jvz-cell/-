@@ -2,62 +2,77 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>完全体・採点システム</title>
+    <title>【手動高速採点】枠調整＆PDF分割ビューワーシステム</title>
     <style>
         body { font-family: sans-serif; background: #f5f7fa; margin: 0; padding: 0; overflow: hidden; user-select: none; }
-        .workspace { display: flex; width: 100vw; height: 100vh; position: relative; }
-        .left-panel { width: 50vw; height: 100vh; overflow-y: auto; padding: 20px; box-sizing: border-box; background: #f8fafc; }
-        .splitter { width: 8px; height: 100vh; background: #cbd5e1; cursor: col-resize; z-index: 100; }
-        .splitter:hover, .splitter.dragging { background: #0096ff; }
-        .right-panel { flex: 1; height: 100vh; background: #475569; display: flex; flex-direction: column; }
-        .pdf-viewer { width: 100%; height: 100%; border: none; }
-        .right-panel.shielded iframe { pointer-events: none; }
         
-        .control-panel { background: #fff; border: 2px solid #e2e8f0; padding: 12px; border-radius: 10px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
+        /* ↕️ 画面分割ワークスペース */
+        .workspace { display: flex; width: 100vw; height: 100vh; position: relative; overflow: hidden; }
+        .left-panel { width: 50vw; height: 100vh; overflow-y: auto; padding: 20px; box-sizing: border-box; background: #f8fafc; position: relative; }
+        
+        /* ↔️ マウスドラッグで割合変更可能なスプリッター線 */
+        .splitter { width: 10px; height: 100vh; background: #cbd5e1; cursor: col-resize; z-index: 200; position: relative; box-shadow: inset 1px 0 0 rgba(0,0,0,0.05); }
+        .splitter:hover, .splitter.dragging { background: #0096ff; }
+        
+        .right-panel { flex: 1; height: 100vh; background: #475569; display: flex; flex-direction: column; position: relative; }
+        .pdf-viewer { width: 100%; height: 100%; border: none; }
+        
+        /* ドラッグ中にiframeにマウスを持っていかれないためのシールドガード */
+        .shield-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 999; display: none; background: transparent; }
+        .workspace.dragging-active .shield-layer { display: block; }
+        
+        /* コントロール UI */
+        .control-panel { background: #fff; border: 2px solid #e2e8f0; padding: 12px; border-radius: 10px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
         .panel-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
         .panel-section { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: bold; color: #4a5568; }
         .panel-section input, .panel-section select { padding: 4px 6px; border-radius: 6px; border: 1px solid #cbd5e1; outline: none; }
         
         .mode-switcher { display: flex; gap: 8px; margin-bottom: 12px; justify-content: center; }
-        .mode-btn { padding: 10px 20px; font-weight: bold; border-radius: 6px; border: 2px solid #cbd5e1; cursor: pointer; background: #fff; }
-        .mode-btn.active { background: #0096ff; color: white; border-color: #0086e6; }
-        .instructions { background: #eef2f7; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-size: 13px; border-left: 5px solid #0096ff; line-height: 1.5; }
+        .mode-btn { padding: 10px 20px; font-weight: bold; border-radius: 6px; border: 2px solid #cbd5e1; cursor: pointer; background: #fff; font-size: 14px; transition: all 0.15s; }
+        .mode-btn.active { background: #0096ff; color: white; border-color: #0086e6; box-shadow: 0 3px 6px rgba(0,150,255,0.2); }
+        .instructions { background: #eef2f7; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-size: 13px; border-left: 5px solid #1e3a8a; line-height: 1.5; }
         
+        /* 解答用紙を囲むアウター・ラッパー */
         .image-container-outer { padding: 15px; background: #cbd5e1; border-radius: 8px; overflow: auto; display: inline-block; min-width: 100%; box-sizing: border-box; }
-        .image-wrapper { position: relative; display: block; margin: 0 auto; }
+        .image-wrapper { position: relative; display: block; margin: 0 auto; box-shadow: 0 4px 15px rgba(0,0,0,0.15); background: white; }
         #canvas-bg { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
         
         .drag-preview-box { position: absolute; border: 2px dashed #ff9800; background: rgba(255,152,0,0.2); pointer-events: none; z-index: 99; display: none; }
         
-        .detected-box { position: absolute; border: 2px solid #0096ff; background: rgba(0,150,255,0.02); cursor: pointer; z-index: 5; }
-        .detected-box.active-target { border: 3px solid #ff1744 !important; background: rgba(255,23,68,0.06); box-shadow: 0 0 10px #ff1744; z-index: 10; }
-        .detected-box.selected-adjust { border: 3px solid #ff9800 !important; background: rgba(255,152,0,0.15) !important; }
-        .haiten-badge { position: absolute; top: -16px; left: 0; background: #0096ff; color: white; font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: bold; pointer-events: none; }
+        /* 採点枠レイヤー */
+        .detected-box { position: absolute; border: 2px solid #0096ff; background: rgba(0,150,255,0.02); cursor: pointer; z-index: 5; box-sizing: border-box; }
+        .detected-box.active-target { border: 3px solid #ff1744 !important; background: rgba(255,23,68,0.06); box-shadow: 0 0 12px #ff1744; z-index: 10; }
+        .detected-box.selected-adjust { border: 3px solid #ff9800 !important; background: rgba(255,152,0,0.15) !important; z-index: 9; }
+        .haiten-badge { position: absolute; top: -16px; left: 0; background: #0096ff; color: white; font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: bold; pointer-events: none; white-space: nowrap; }
         
-        .stamp { position: absolute; width: 28px; height: 28px; background-size: contain; background-repeat: no-repeat; transform: translateY(-50%); cursor: move; z-index: 15; }
-        .score-input { position: absolute; width: 90px; height: 24px; border: 2px solid red; color: red; font-size: 15px; text-align: center; border-radius: 4px; background: white; z-index: 100; transform: translate(-50%, -50%); outline: none; }
-        .dynamic-text { position: absolute; transform: translate(-50%, -50%); cursor: move; z-index: 16; white-space: nowrap; }
-        .btn-download { background: #0096ff; color: white; font-weight: bold; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; }
+        /* スタンプ＆自由テキスト */
+        .stamp { position: absolute; width: 32px; height: 32px; background-size: contain; background-repeat: no-repeat; transform: translate(-20%, -50%); cursor: move; z-index: 15; }
+        .score-input { position: absolute; width: 90px; height: 24px; border: 2px solid red; color: red; font-size: 15px; text-align: center; border-radius: 4px; background: white; z-index: 100; transform: translate(-50%, -50%); outline: none; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+        .dynamic-text { position: absolute; transform: translate(-50%, -50%); cursor: move; z-index: 16; white-space: nowrap; font-weight: bold; user-select: none; }
+        
+        /* ボタン類 */
+        .btn-download { background: #0096ff; color: white; font-weight: bold; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; }
         .btn-rotate { background: #2ed573; color: white; font-weight: bold; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-        .btn-apply-all { background: #e2e8f0; color: #334155; font-size: 12px; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
+        .btn-apply-all { background: #e2e8f0; color: #334155; font-size: 12px; border: 1px solid #cbd5e1; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
         .btn-apply-all:hover { background: #cbd5e1; color: #0f172a; }
     </style>
 </head>
 <body>
-<div class="workspace">
+<div class="workspace" id="mainWorkspace">
     <div class="left-panel" id="leftPanel">
         <div class="mode-switcher">
             <button id="btn-mode-select" class="mode-btn active" onclick="switchMode('select')">1️⃣ 枠調整モード</button>
-            <button id="btn-mode-grade" class="mode-btn" onclick="switchMode('grade')">2️⃣ 採点モード (〇✓・自動計算)</button>
+            <button id="btn-mode-grade" class="mode-btn" onclick="switchMode('grade')">2️⃣ 採点モード (手動〇/×/△)</button>
         </div>
+        
         <div class="control-panel">
             <div class="panel-row">
-                <div class="panel-section" style="background:#f1f5f9; padding:4px 8px; border-radius:6px; border:1px dashed #0096ff;">
+                <div class="panel-section" style="background:#f8fafc; padding:4px 8px; border-radius:6px; border:1px solid #cbd5e1;">
                     <span>📝 配点入力:</span>
                     <input type="number" id="globalHaitenInput" value="5" style="width:45px;"><span>点</span>
                     <button class="btn-apply-all" onclick="applyHaitenToRemaining()">✨ それ以外の枠をこの点数にする</button>
                 </div>
-                <div>
+                <div style="display: flex; gap: 8px; align-items: center;">
                     <button class="btn-rotate" onclick="rotateImagePhysical90()">🔄 右に90度回転</button>
                     <button class="btn-download" onclick="downloadScoredImagePNG()">⬇️ 画像をダウンロード</button>
                 </div>
@@ -76,8 +91,10 @@
                 <div class="panel-section"><span>🆃 太字:</span><input type="checkbox" id="txtBold" checked></div>
             </div>
         </div>
-        <div id="info-select" class="instructions">🎯 <b>【枠調整モード】</b>: 枠をクリックしてオレンジ色にすると、左上の数値ボックスから個別に配点変更も可能！不要枠は <b>[ F ] キー</b> で消去。</div>
-        <div id="info-grade" class="instructions" style="display:none;">✍️ <b>【採点モード】</b>: 画面に残ったすべての枠から<b>「一番左上」の枠を自動計算して順番に</b>採点スタート！</div>
+        
+        <div id="info-select" class="instructions">🎯 <b>【枠調整モード】</b>: 枠をクリックして個別配点。不要枠は <b>[ F ] キー</b> で消去。ドラッグで新規枠追加。</div>
+        <div id="info-grade" class="instructions" style="display:none;">✍️ <b>【採点モード】</b>: キーボードの <b>1=〇, 2=×, 3=△</b>, 0=スキップ。<b>[ F ] キー</b> で枠消去、<b>[ T ] キー</b> でマウス位置に自由文字入れ（「=tensuu」と打つと自動で合計点が計算されて表示されます）。スタンプクリックでも 〇⇄×⇄△ が切り替わります。</div>
+        
         <div class="image-container-outer">
             <div class="image-wrapper" id="imageArea">
                 <canvas id="canvas-bg"></canvas>
@@ -85,26 +102,79 @@
             </div>
         </div>
     </div>
-    <div class="splitter" id="vSplitter"></div>
-    <div class="right-panel" id="rightPanel"><iframe class="pdf-viewer" src="kaitou.pdf#toolbar=1&navpanes=0&scrollbar=1"></iframe></div>
-</div>
-<script>
-    const leftPanel = document.getElementById('leftPanel'), rightPanel = document.getElementById('rightPanel'), splitter = document.getElementById('vSplitter');
-    const imageArea = document.getElementById('imageArea'), canvas = document.getElementById('canvas-bg'), ctx = canvas.getContext('2d'), dragPreview = document.getElementById('dragPreview');
-    let currentMode = 'select', currentIndex = 0, selectedBoxIndex = null, boxElements = [], placedMarks = {};
     
-    let pointsData = [{"x": 180, "y": 155, "w": 88, "h": 539, "status": "", "haiten": 5}, {"x": 183, "y": 158, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 275, "y": 157, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 322, "y": 151, "w": 544, "h": 542, "status": "", "haiten": 5}, {"x": 325, "y": 154, "w": 498, "h": 517, "status": "", "haiten": 5}, {"x": 881, "y": 158, "w": 109, "h": 215, "status": "", "haiten": 5}, {"x": 884, "y": 160, "w": 40, "h": 211, "status": "", "haiten": 5}, {"x": 924, "y": 160, "w": 63, "h": 210, "status": "", "haiten": 5}, {"x": 88, "y": 335, "w": 87, "h": 360, "status": "", "haiten": 5}, {"x": 91, "y": 337, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 184, "y": 336, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 275, "y": 335, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 823, "y": 331, "w": 40, "h": 160, "status": "", "haiten": 5}, {"x": 132, "y": 377, "w": 40, "h": 78, "status": "", "haiten": 5}, {"x": 132, "y": 476, "w": 40, "h": 78, "status": "", "haiten": 5}, {"x": 92, "y": 516, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 184, "y": 514, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 225, "y": 515, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 276, "y": 514, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 823, "y": 513, "w": 41, "h": 155, "status": "", "haiten": 5}, {"x": 133, "y": 574, "w": 40, "h": 79, "status": "", "haiten": 5}, {"x": 96, "y": 736, "w": 604, "h": 542, "status": "", "haiten": 5}, {"x": 98, "y": 741, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 139, "y": 741, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 180, "y": 741, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 221, "y": 741, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 261, "y": 741, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 344, "y": 739, "w": 312, "h": 516, "status": "", "haiten": 5}, {"x": 702, "y": 733, "w": 168, "h": 541, "status": "", "haiten": 5}, {"x": 785, "y": 767, "w": 40, "h": 114, "status": "", "haiten": 5}, {"x": 433, "y": 836, "w": 172, "h": 322, "status": "", "haiten": 5}, {"x": 786, "y": 882, "w": 40, "h": 66, "status": "", "haiten": 5}, {"x": 99, "y": 920, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 140, "y": 920, "w": 40, "h": 58, "status": "", "haiten": 5}, {"x": 180, "y": 919, "w": 41, "h": 159, "status": "", "haiten": 5}, {"x": 222, "y": 919, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 262, "y": 919, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 303, "y": 919, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 704, "y": 946, "w": 40, "h": 81, "status": "", "haiten": 5}, {"x": 786, "y": 948, "w": 40, "h": 115, "status": "", "haiten": 5}, {"x": 872, "y": 942, "w": 87, "h": 330, "status": "", "haiten": 5}, {"x": 875, "y": 945, "w": 39, "h": 81, "status": "", "haiten": 5}, {"x": 140, "y": 999, "w": 40, "h": 59, "status": "", "haiten": 5}, {"x": 704, "y": 1048, "w": 40, "h": 81, "status": "", "haiten": 5}, {"x": 827, "y": 1047, "w": 40, "h": 82, "status": "", "haiten": 5}, {"x": 875, "y": 1047, "w": 40, "h": 81, "status": "", "haiten": 5}, {"x": 787, "y": 1064, "w": 40, "h": 65, "status": "", "haiten": 5}, {"x": 100, "y": 1098, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 140, "y": 1098, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 181, "y": 1098, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 222, "y": 1098, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 263, "y": 1098, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 304, "y": 1098, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 657, "y": 1096, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 787, "y": 1149, "w": 40, "h": 102, "status": "", "haiten": 5}, {"x": 828, "y": 1149, "w": 39, "h": 102, "status": "", "haiten": 5}, {"x": 875, "y": 1149, "w": 41, "h": 82, "status": "", "haiten": 5}, {"x": 916, "y": 1149, "w": 40, "h": 101, "status": "", "haiten": 5}, {"x": 705, "y": 1150, "w": 40, "h": 82, "status": "", "haiten": 5}]; 
+    <div class="splitter" id="vSplitter"></div>
+    
+    <div class="right-panel" id="rightPanel">
+        <div class="shield-layer"></div>
+        <iframe class="pdf-viewer" src="kaitou.pdf#toolbar=1&navpanes=0&scrollbar=1"></iframe>
+    </div>
+</div>
+
+<script>
+    const mainWorkspace = document.getElementById('mainWorkspace');
+    const leftPanel = document.getElementById('leftPanel');
+    const rightPanel = document.getElementById('rightPanel');
+    const splitter = document.getElementById('vSplitter');
+    const imageArea = document.getElementById('imageArea');
+    const canvas = document.getElementById('canvas-bg');
+    const ctx = canvas.getContext('2d');
+    const dragPreview = document.getElementById('dragPreview');
+    
+    let currentMode = 'select', currentIndex = 0, selectedBoxIndex = null;
+    let boxElements = [], placedMarks = {}, extraTexts = [];
+    
+    let pointsData = [{"x": 170, "y": 148, "w": 87, "h": 539, "status": "", "haiten": 5}, {"x": 312, "y": 145, "w": 543, "h": 541, "status": "", "haiten": 5}, {"x": 314, "y": 147, "w": 498, "h": 517, "status": "", "haiten": 5}, {"x": 173, "y": 151, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 265, "y": 150, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 870, "y": 151, "w": 109, "h": 216, "status": "", "haiten": 5}, {"x": 873, "y": 154, "w": 40, "h": 210, "status": "", "haiten": 5}, {"x": 913, "y": 154, "w": 63, "h": 210, "status": "", "haiten": 5}, {"x": 78, "y": 327, "w": 87, "h": 361, "status": "", "haiten": 5}, {"x": 81, "y": 330, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 173, "y": 329, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 265, "y": 329, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 812, "y": 325, "w": 40, "h": 159, "status": "", "haiten": 5}, {"x": 122, "y": 369, "w": 34, "h": 49, "status": "", "haiten": 5}, {"x": 814, "y": 359, "w": 28, "h": 46, "status": "", "haiten": 5}, {"x": 122, "y": 468, "w": 40, "h": 79, "status": "", "haiten": 5}, {"x": 81, "y": 509, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 174, "y": 508, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 214, "y": 507, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 265, "y": 508, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 812, "y": 507, "w": 41, "h": 155, "status": "", "haiten": 5}, {"x": 122, "y": 567, "w": 40, "h": 79, "status": "", "haiten": 5}, {"x": 85, "y": 730, "w": 603, "h": 541, "status": "", "haiten": 5}, {"x": 87, "y": 734, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 128, "y": 734, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 169, "y": 734, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 210, "y": 734, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 251, "y": 734, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 333, "y": 732, "w": 312, "h": 516, "status": "", "haiten": 5}, {"x": 690, "y": 726, "w": 168, "h": 541, "status": "", "haiten": 5}, {"x": 774, "y": 760, "w": 40, "h": 69, "status": "", "haiten": 5}, {"x": 774, "y": 819, "w": 40, "h": 56, "status": "", "haiten": 5}, {"x": 422, "y": 829, "w": 172, "h": 322, "status": "", "haiten": 5}, {"x": 774, "y": 876, "w": 40, "h": 65, "status": "", "haiten": 5}, {"x": 88, "y": 913, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 129, "y": 912, "w": 40, "h": 59, "status": "", "haiten": 5}, {"x": 169, "y": 912, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 210, "y": 912, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 251, "y": 912, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 292, "y": 912, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 693, "y": 939, "w": 39, "h": 82, "status": "", "haiten": 5}, {"x": 774, "y": 942, "w": 40, "h": 115, "status": "", "haiten": 5}, {"x": 861, "y": 935, "w": 86, "h": 331, "status": "", "haiten": 5}, {"x": 863, "y": 938, "w": 40, "h": 47, "status": "", "haiten": 5}, {"x": 129, "y": 992, "w": 40, "h": 58, "status": "", "haiten": 5}, {"x": 739, "y": 999, "w": 31, "h": 48, "status": "", "haiten": 5}, {"x": 863, "y": 975, "w": 40, "h": 44, "status": "", "haiten": 5}, {"x": 693, "y": 1042, "w": 40, "h": 81, "status": "", "haiten": 5}, {"x": 815, "y": 1041, "w": 41, "h": 81, "status": "", "haiten": 5}, {"x": 863, "y": 1040, "w": 40, "h": 40, "status": "", "haiten": 5}, {"x": 775, "y": 1057, "w": 40, "h": 66, "status": "", "haiten": 5}, {"x": 88, "y": 1091, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 129, "y": 1091, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 170, "y": 1091, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 211, "y": 1091, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 252, "y": 1090, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 293, "y": 1090, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 646, "y": 1089, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 863, "y": 1075, "w": 40, "h": 47, "status": "", "haiten": 5}, {"x": 693, "y": 1144, "w": 40, "h": 82, "status": "", "haiten": 5}, {"x": 775, "y": 1143, "w": 40, "h": 102, "status": "", "haiten": 5}, {"x": 815, "y": 1143, "w": 41, "h": 101, "status": "", "haiten": 5}, {"x": 863, "y": 1142, "w": 40, "h": 82, "status": "", "haiten": 5}, {"x": 904, "y": 1142, "w": 40, "h": 103, "status": "", "haiten": 5}]; 
     let currentW = 1000, currentH = 1422, lastMouseX = 50, lastMouseY = 50;
+    let currentRotationState = 0;
 
-    imageArea.addEventListener('mousemove', (e) => { const r = imageArea.getBoundingClientRect(); lastMouseX = e.clientX - r.left; lastMouseY = e.clientY - r.top; });
+    imageArea.addEventListener('mousemove', (e) => {
+        const r = imageArea.getBoundingClientRect();
+        lastMouseX = e.clientX - r.left;
+        lastMouseY = e.clientY - r.top;
+    });
+
+    // ↔️ 画面分割ドラッグ変更ロジック
     let isSplitting = false;
-    splitter.addEventListener('mousedown', () => { isSplitting = true; splitter.classList.add('dragging'); rightPanel.classList.add('shielded'); });
-    document.addEventListener('mousemove', (e) => { if (isSplitting) { let p = (e.clientX / window.innerWidth) * 100; if (p > 20 && p < 80) { leftPanel.style.width = p + 'vw'; splitter.style.left = p + 'vw'; } } });
-    document.addEventListener('mouseup', () => { if (isSplitting) { isSplitting = false; splitter.classList.remove('dragging'); rightPanel.classList.remove('shielded'); } });
+    splitter.addEventListener('mousedown', (e) => {
+        isSplitting = true;
+        splitter.classList.add('dragging');
+        mainWorkspace.classList.add('dragging-active');
+        e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (isSplitting) {
+            let percent = (e.clientX / window.innerWidth) * 100;
+            if (percent > 15 && percent < 85) {
+                leftPanel.style.width = percent + 'vw';
+            }
+        }
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isSplitting) {
+            isSplitting = false;
+            splitter.classList.remove('dragging');
+            mainWorkspace.classList.remove('dragging-active');
+        }
+    });
 
-    const baseImg = new Image(); baseImg.src = "test_sheet.jpg";
-    baseImg.onload = () => { initCanvas(); };
-    function initCanvas() { canvas.width = currentW; canvas.height = currentH; imageArea.style.width = currentW+'px'; imageArea.style.height = currentH+'px'; ctx.drawImage(baseImg, 0, 0, currentW, currentH); renderBoxes(); }
+    // 🖼️ 解答用紙Canvas描画システム
+    const baseImg = new Image();
+    baseImg.src = "test_sheet.jpg";
+    baseImg.onload = () => {
+        initCanvas();
+    };
+    
+    function initCanvas() {
+        canvas.width = currentW;
+        canvas.height = currentH;
+        imageArea.style.width = currentW + 'px';
+        imageArea.style.height = currentH + 'px';
+        ctx.drawImage(baseImg, 0, 0, currentW, currentH);
+        renderBoxes();
+    }
 
     function applyHaitenToRemaining() {
         const targetValue = parseInt(document.getElementById('globalHaitenInput').value) || 0;
@@ -114,69 +184,37 @@
         renderBoxes();
     }
 
-    // 💡 【大改造】スタンプや合計点数テキストをCanvasに焼き込んで高画質PNGとしてエクスポートする超クリーンなエンジン
     function downloadScoredImagePNG() {
-        // ダミーの合成用Canvasを一時作成
         const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = canvas.width;
-        exportCanvas.height = canvas.height;
+        exportCanvas.width = canvas.width; exportCanvas.height = canvas.height;
         const eCtx = exportCanvas.getContext('2d');
-        
-        // 1. まず現在の背景画像をそのまま転写
         eCtx.drawImage(canvas, 0, 0);
         
-        // 2. 画面上のスタンプ（〇・✓・△）を正確な位置に合成
         const stampElements = imageArea.querySelectorAll('.stamp');
-        let loadedCount = 0;
-        
         const textElements = imageArea.querySelectorAll('.dynamic-text');
         
         function finalizeDownload() {
-            // 3. テキスト（合計点数など）をCanvasのフォントスタイルを合わせて焼き付け
             textElements.forEach(el => {
-                let lx = parseFloat(el.style.left);
-                let ty = parseFloat(el.style.top);
-                
-                eCtx.font = `${el.style.fontWeight} ${el.style.fontSize} ${el.style.fontFamily}`;
-                eCtx.fillStyle = el.style.color || '#ff0000';
-                eCtx.textAlign = 'center';
-                eCtx.textBaseline = 'middle';
+                let lx = parseFloat(el.style.left); let ty = parseFloat(el.style.top);
+                eCtx.font = el.style.fontWeight + " " + el.style.fontSize + " " + el.style.fontFamily;
+                eCtx.fillStyle = el.style.color || '#ff0000'; eCtx.textAlign = 'center'; eCtx.textBaseline = 'middle';
                 eCtx.fillText(el.innerText, lx, ty);
             });
-            
-            // 4. ダウンロードトリガーを発火
-            const link = document.createElement('a');
-            link.download = 'scored_sheet.png';
-            link.href = exportCanvas.toDataURL('image/png');
-            link.click();
+            const link = document.createElement('a'); link.download = 'scored_sheet.png'; link.href = exportCanvas.toDataURL('image/png'); link.click();
         }
         
-        if (stampElements.length === 0) {
-            finalizeDownload();
-            return;
-        }
-        
-        // スタンプ画像のURLを展開して非同期でロード完了を待ってから合成
+        if (stampElements.length === 0) { finalizeDownload(); return; }
+        let loadedCount = 0;
         stampElements.forEach(el => {
             const img = new Image();
-            // bgImageのurl("maru.png") から純粋なパスを抽出
             let srcUrl = el.style.backgroundImage.replace(/url\(['"]?([^'"]*)['"]?\)/, '$1');
             img.src = srcUrl;
-            
             img.onload = () => {
-                let sx = parseFloat(el.style.left) + 6; // スタイルのマイナス補正を戻す
-                let sy = parseFloat(el.style.top);
-                // スタンプを真ん中配置にするため調整
-                eCtx.drawImage(img, sx, sy - 14, 28, 28);
-                loadedCount++;
-                if (loadedCount === stampElements.length) {
-                    finalizeDownload();
-                }
+                let sx = parseFloat(el.style.left); let ty = parseFloat(el.style.top);
+                eCtx.drawImage(img, sx - 10, ty - 16, 32, 32);
+                loadedCount++; if (loadedCount === stampElements.length) finalizeDownload();
             };
-            img.onerror = () => {
-                loadedCount++;
-                if (loadedCount === stampElements.length) finalizeDownload();
-            };
+            img.onerror = () => { loadedCount++; if (loadedCount === stampElements.length) finalizeDownload(); };
         });
     }
 
@@ -187,26 +225,19 @@
         document.getElementById('info-select').style.display = mode === 'select' ? 'block' : 'none';
         document.getElementById('info-grade').style.display = mode === 'grade' ? 'block' : 'none';
         
+        selectedBoxIndex = null;
         if(mode === 'grade') {
-            selectedBoxIndex = null;
             pointsData.sort((a, b) => {
-                let lineA = Math.floor(a.y / 25);
-                let lineB = Math.floor(b.y / 25);
+                let lineA = Math.floor(a.y / 25); let lineB = Math.floor(b.y / 25);
                 if (lineA !== lineB) return lineA - lineB;
                 return a.x - b.x;
             });
-            
-            imageArea.querySelectorAll('.stamp, .dynamic-text').forEach(el => el.remove());
-            placedMarks = {};
-            currentIndex = 0;
-            renderBoxes();
-            highlightCurrentBox();
-        } else {
-            selectedBoxIndex = null;
-            renderBoxes();
+            currentIndex = 0; highlightCurrentBox();
         }
+        renderBoxes();
     }
 
+    // 新規枠ドラッグ追加
     let isDrawingBox = false, startX = 0, startY = 0;
     imageArea.addEventListener('mousedown', (e) => {
         if (currentMode !== 'select' || e.target.className.includes('stamp') || e.target.className.includes('detected-box') || document.activeElement.tagName === 'INPUT') return;
@@ -220,8 +251,7 @@
         if (w > 10 && h > 10) {
             const defaultValue = parseInt(document.getElementById('globalHaitenInput').value) || 5;
             pointsData.push({ x: startX, y: startY, w: w, h: h, status: '', haiten: defaultValue });
-            selectedBoxIndex = pointsData.length - 1;
-            renderBoxes();
+            selectedBoxIndex = pointsData.length - 1; renderBoxes();
         }
     });
 
@@ -241,15 +271,15 @@
             box.appendChild(badge);
             
             box.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if(currentMode === 'select') { selectedBoxIndex = idx; renderBoxes(); }
+                e.stopPropagation(); if(currentMode === 'select') { selectedBoxIndex = idx; renderBoxes(); }
             });
             
             imageArea.appendChild(box); boxElements.push(box);
-            if (currentMode === 'grade' && !placedMarks[idx] && pt.status) {
+            if (!placedMarks[idx] && pt.status) {
                 createStampElement(pt.x, pt.y + (pt.h / 2), pt.status + '.png', idx);
             }
         });
+        if(currentMode === 'grade') highlightCurrentBox();
     }
 
     function deleteBox(idx) {
@@ -263,9 +293,7 @@
             if (ik > idx) newPlacedMarks[ik - 1] = placedMarks[k];
             else if (ik < idx) newPlacedMarks[ik] = placedMarks[k];
         });
-        placedMarks = newPlacedMarks;
-        selectedBoxIndex = null;
-        renderBoxes();
+        placedMarks = newPlacedMarks; selectedBoxIndex = null; renderBoxes();
         if (currentMode === 'grade') {
             if (currentIndex >= pointsData.length) currentIndex = Math.max(0, pointsData.length - 1);
             highlightCurrentBox();
@@ -275,8 +303,8 @@
     function calculateTotalScore() {
         let total = 0;
         pointsData.forEach(pt => { 
-            let rate = pt.status === 'batsu' ? 0.0 : (pt.status === 'sankaku' ? 0.5 : 1.0); 
-            total += ((pt.haiten || 0) * rate); 
+            if (pt.status === 'maru') total += (pt.haiten || 0); 
+            if (pt.status === 'sankaku') total += Math.floor((pt.haiten || 0) / 2); 
         }); 
         return total;
     }
@@ -286,11 +314,8 @@
 
         if (e.key.toLowerCase() === 'f') {
             e.preventDefault();
-            if (currentMode === 'select' && selectedBoxIndex !== null) {
-                deleteBox(selectedBoxIndex);
-            } else if (currentMode === 'grade' && pointsData.length > 0) {
-                deleteBox(currentIndex);
-            }
+            if (currentMode === 'select' && selectedBoxIndex !== null) { deleteBox(selectedBoxIndex); } 
+            else if (currentMode === 'grade' && pointsData.length > 0) { deleteBox(currentIndex); }
             return;
         }
 
@@ -307,7 +332,11 @@
         if (currentMode !== 'grade') return;
         if (currentIndex < 0 || currentIndex >= pointsData.length) return;
 
-        let imgFile = e.key === '1' ? 'maru.png' : (e.key === '2' ? 'batsu.png' : (e.key === '3' ? 'sankaku.png' : ''));
+        let imgFile = '';
+        if (e.key === '1') imgFile = 'maru.png';
+        else if (e.key === '2') imgFile = 'batsu.png';
+        else if (e.key === '3') imgFile = 'sankaku.png';
+
         if (imgFile !== '') {
             createStampElement(pointsData[currentIndex].x, pointsData[currentIndex].y + (pointsData[currentIndex].h / 2), imgFile, currentIndex);
             currentIndex++; highlightCurrentBox();
@@ -323,18 +352,21 @@
     });
 
     function createStampElement(x, y, initialImg, idx) {
-        if (currentMode !== 'grade') return;
         if (placedMarks[idx]) placedMarks[idx].remove();
         
-        const stamp = document.createElement('div'); stamp.className = 'stamp'; stamp.style.left = (x - 6)+'px'; stamp.style.top = y+'px';
-        let status = initialImg.replace('.png', ''); stamp.style.backgroundImage = `url('${status}.png')`;
+        const stamp = document.createElement('div'); stamp.className = 'stamp'; stamp.style.left = x+'px'; stamp.style.top = y+'px';
+        let status = initialImg.replace('.png', ''); stamp.style.backgroundImage = "url('" + status + ".png')";
 
         stamp.addEventListener('mousedown', (e) => {
             e.stopPropagation(); if (currentMode !== 'grade' || e.button !== 0) return;
             let sx = e.clientX, sy = e.clientY; startDrag(e, stamp);
             document.addEventListener('mouseup', function onUp(ev) {
                 if (Math.abs(ev.clientX - sx) < 3 && Math.abs(ev.clientY - sy) < 3) {
-                    status = status === 'maru' ? 'batsu' : (status === 'batsu' ? 'sankaku' : 'maru'); stamp.style.backgroundImage = `url('${status}.png')`;
+                    if (status === 'maru') status = 'batsu';
+                    else if (status === 'batsu') status = 'sankaku';
+                    else status = 'maru';
+                    
+                    stamp.style.backgroundImage = "url('" + status + ".png')";
                     if(idx !== null && pointsData[idx]) pointsData[idx].status = status;
                 }
                 document.removeEventListener('mouseup', onUp);
@@ -349,7 +381,11 @@
             e.stopPropagation(); if (e.key === 'Enter') {
                 let val = input.value.trim();
                 if (val.toLowerCase() === '=tensuu') val = calculateTotalScore();
-                if (val !== "") { const disp = createDynamicTextElement(parseFloat(input.style.left), parseFloat(input.style.top), val); imageArea.appendChild(disp); }
+                if (val !== "") { 
+                    const disp = createDynamicTextElement(parseFloat(input.style.left), parseFloat(input.style.top), val); 
+                    imageArea.appendChild(disp); 
+                    extraTexts.push({ el: disp, x: parseFloat(input.style.left), y: parseFloat(input.style.top), text: val });
+                }
                 input.remove(); if (currentMode === 'grade' && pointsData[currentIndex]) { currentIndex++; highlightCurrentBox(); }
             }
         });
@@ -366,10 +402,8 @@
 
     function createDynamicTextElement(x, y, text) {
         const disp = document.createElement('div'); disp.className = 'dynamic-text'; disp.innerText = text; disp.style.left = x+'px'; disp.style.top = y+'px';
-        disp.style.fontFamily = document.getElementById('txtFont').value;
-        disp.style.fontSize = document.getElementById('txtSize').value + 'px';
-        disp.style.letterSpacing = document.getElementById('txtSpacing').value + 'px';
-        disp.style.color = document.getElementById('txtColor').value;
+        disp.style.fontFamily = document.getElementById('txtFont').value; disp.style.fontSize = document.getElementById('txtSize').value + 'px';
+        disp.style.letterSpacing = document.getElementById('txtSpacing').value + 'px'; disp.style.color = document.getElementById('txtColor').value;
         disp.style.fontWeight = document.getElementById('txtBold').checked ? 'bold' : 'normal';
         disp.addEventListener('mousedown', (e) => { e.stopPropagation(); startDrag(e, disp); });
         return disp;
@@ -381,25 +415,44 @@
     function stopDrag() { document.removeEventListener('mousemove', onDrag); document.removeEventListener('mouseup', stopDrag); activeDragElement = null; }
 
     function rotateImagePhysical90() {
+        currentRotationState = (currentRotationState + 90) % 360;
         let savedMarks = [];
         Object.keys(placedMarks).forEach(idx => {
             const el = placedMarks[idx];
-            if (el) {
-                if (el.classList.contains('stamp')) savedMarks.push({ idx: parseInt(idx), type: 'stamp', content: el.style.backgroundImage.includes('batsu')?'batsu.png':(el.style.backgroundImage.includes('sankaku')?'sankaku.png':'maru.png'), status: pointsData[idx]?.status||'maru' });
-                else if (el.classList.contains('dynamic-text')) savedMarks.push({ idx: parseInt(idx), type: 'text', content: el.innerText });
+            if (el && el.classList.contains('stamp')) {
+                let markType = 'maru.png';
+                if(el.style.backgroundImage.includes('batsu')) markType = 'batsu.png';
+                else if(el.style.backgroundImage.includes('sankaku')) markType = 'sankaku.png';
+                savedMarks.push({ idx: parseInt(idx), type: 'stamp', content: markType, status: pointsData[idx]?.status||'maru' });
             }
         });
-        imageArea.querySelectorAll('.detected-box, .stamp, .dynamic-text, .score-input').forEach(el => el.remove()); placedMarks = {};
+        
+        let savedTexts = [];
+        imageArea.querySelectorAll('.dynamic-text').forEach(el => {
+            savedTexts.push({ text: el.innerText, x: parseFloat(el.style.left), y: parseFloat(el.style.top) });
+        });
+
+        imageArea.querySelectorAll('.detected-box, .stamp, .dynamic-text, .score-input').forEach(el => el.remove()); 
+        placedMarks = {}; extraTexts = [];
+        
         const temp = document.createElement('canvas'); temp.width = canvas.width; temp.height = canvas.height; temp.getContext('2d').drawImage(canvas,0,0);
         let oldW = currentW, oldH = currentH; currentW = oldH; currentH = oldW;
         canvas.width = currentW; canvas.height = currentH; imageArea.style.width = currentW+'px'; imageArea.style.height = currentH+'px';
         ctx.translate(currentW/2, currentH/2); ctx.rotate(90*Math.PI/180); ctx.drawImage(temp, -oldW/2, -oldH/2); ctx.setTransform(1,0,0,1,0,0);
+        
         pointsData = pointsData.map(pt => ({ x: oldH - (pt.y + pt.h), y: pt.x, w: pt.h, h: pt.w, status: pt.status || '', haiten: pt.haiten || 5 }));
         renderBoxes();
+        
         savedMarks.forEach(m => {
             let pt = pointsData[m.idx]; if(!pt) return;
-            if (m.type === 'stamp') { createStampElement(pt.x, pt.y+(pt.h/2), m.content, m.idx); if(pointsData[m.idx]) pointsData[m.idx].status = m.status; }
-            else { const disp = createDynamicTextElement(pt.x+(pt.w/2), pt.y+(pt.h/2), m.content); imageArea.appendChild(disp); placedMarks[m.idx] = disp; }
+            createStampElement(pt.x, pt.y+(pt.h/2), m.content, m.idx);
+            if(pointsData[m.idx]) pointsData[m.idx].status = m.status;
+        });
+        
+        savedTexts.forEach(t => {
+            let rx = oldH - t.y; let ry = t.x;
+            const disp = createDynamicTextElement(rx, ry, t.text);
+            imageArea.appendChild(disp);
         });
         if(currentMode === 'grade') highlightCurrentBox();
     }
