@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>完全体・採点システム</title>
+    <style>
+        body { font-family: sans-serif; background: #f5f7fa; margin: 0; padding: 0; overflow: hidden; user-select: none; }
+        .workspace { display: flex; width: 100vw; height: 100vh; position: relative; }
+        .left-panel { width: 50vw; height: 100vh; overflow-y: auto; padding: 20px; box-sizing: border-box; background: #f8fafc; }
+        .splitter { width: 8px; height: 100vh; background: #cbd5e1; cursor: col-resize; z-index: 100; }
+        .splitter:hover, .splitter.dragging { background: #0096ff; }
+        .right-panel { flex: 1; height: 100vh; background: #475569; display: flex; flex-direction: column; }
+        .pdf-viewer { width: 100%; height: 100%; border: none; }
+        .right-panel.shielded iframe { pointer-events: none; }
+        
+        .control-panel { background: #fff; border: 2px solid #e2e8f0; padding: 12px; border-radius: 10px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .panel-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+        .panel-section { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: bold; color: #4a5568; }
+        .panel-section input, .panel-section select { padding: 4px 6px; border-radius: 6px; border: 1px solid #cbd5e1; outline: none; }
+        
+        .mode-switcher { display: flex; gap: 8px; margin-bottom: 12px; justify-content: center; }
+        .mode-btn { padding: 10px 20px; font-weight: bold; border-radius: 6px; border: 2px solid #cbd5e1; cursor: pointer; background: #fff; }
+        .mode-btn.active { background: #0096ff; color: white; border-color: #0086e6; }
+        .instructions { background: #eef2f7; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-size: 13px; border-left: 5px solid #0096ff; line-height: 1.5; }
+        
+        .image-container-outer { padding: 15px; background: #cbd5e1; border-radius: 8px; overflow: auto; display: inline-block; min-width: 100%; box-sizing: border-box; }
+        .image-wrapper { position: relative; display: block; margin: 0 auto; }
+        #canvas-bg { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        .drag-preview-box { position: absolute; border: 2px dashed #ff9800; background: rgba(255,152,0,0.2); pointer-events: none; z-index: 99; display: none; }
+        
+        .detected-box { position: absolute; border: 2px solid #0096ff; background: rgba(0,150,255,0.02); cursor: pointer; z-index: 5; }
+        .detected-box.active-target { border: 3px solid #ff1744 !important; background: rgba(255,23,68,0.06); box-shadow: 0 0 10px #ff1744; z-index: 10; }
+        .detected-box.selected-adjust { border: 3px solid #ff9800 !important; background: rgba(255,152,0,0.15) !important; }
+        .haiten-badge { position: absolute; top: -16px; left: 0; background: #0096ff; color: white; font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: bold; pointer-events: none; }
+        
+        .stamp { position: absolute; width: 28px; height: 28px; background-size: contain; background-repeat: no-repeat; transform: translateY(-50%); cursor: move; z-index: 15; }
+        .score-input { position: absolute; width: 90px; height: 24px; border: 2px solid red; color: red; font-size: 15px; text-align: center; border-radius: 4px; background: white; z-index: 100; transform: translate(-50%, -50%); outline: none; }
+        .dynamic-text { position: absolute; transform: translate(-50%, -50%); cursor: move; z-index: 16; white-space: nowrap; }
+        .btn-download { background: #0096ff; color: white; font-weight: bold; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; }
+        .btn-rotate { background: #2ed573; color: white; font-weight: bold; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .btn-apply-all { background: #e2e8f0; color: #334155; font-size: 12px; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
+        .btn-apply-all:hover { background: #cbd5e1; color: #0f172a; }
+    </style>
+</head>
+<body>
+<div class="workspace">
+    <div class="left-panel" id="leftPanel">
+        <div class="mode-switcher">
+            <button id="btn-mode-select" class="mode-btn active" onclick="switchMode('select')">1️⃣ 枠調整モード</button>
+            <button id="btn-mode-grade" class="mode-btn" onclick="switchMode('grade')">2️⃣ 採点モード (〇✓・自動計算)</button>
+        </div>
+        <div class="control-panel">
+            <div class="panel-row">
+                <div class="panel-section" style="background:#f1f5f9; padding:4px 8px; border-radius:6px; border:1px dashed #0096ff;">
+                    <span>📝 配点入力:</span>
+                    <input type="number" id="globalHaitenInput" value="5" style="width:45px;"><span>点</span>
+                    <button class="btn-apply-all" onclick="applyHaitenToRemaining()">✨ それ以外の枠をこの点数にする</button>
+                </div>
+                <div>
+                    <button class="btn-rotate" onclick="rotateImagePhysical90()">🔄 右に90度回転</button>
+                    <button class="btn-download" onclick="downloadScoredImagePNG()">⬇️ 画像をダウンロード</button>
+                </div>
+            </div>
+            <div class="panel-row" style="border-top:1px solid #e2e8f0; padding-top:8px; justify-content:flex-start; gap:15px;">
+                <div class="panel-section"><span>🔤 フォント:</span>
+                    <select id="txtFont">
+                        <option value="sans-serif">ゴシック体</option>
+                        <option value="serif">明朝体</option>
+                        <option value="monospace">等幅</option>
+                    </select>
+                </div>
+                <div class="panel-section"><span>📐 サイズ:</span><input type="number" id="txtSize" value="26" style="width:45px;"><span>px</span></div>
+                <div class="panel-section"><span>↔️ 間隔:</span><input type="number" id="txtSpacing" value="0" style="width:45px;"><span>px</span></div>
+                <div class="panel-section"><span>🎨 色:</span><input type="color" id="txtColor" value="#ff0000"></div>
+                <div class="panel-section"><span>🆃 太字:</span><input type="checkbox" id="txtBold" checked></div>
+            </div>
+        </div>
+        <div id="info-select" class="instructions">🎯 <b>【枠調整モード】</b>: 枠をクリックしてオレンジ色にすると、左上の数値ボックスから個別に配点変更も可能！不要枠は <b>[ F ] キー</b> で消去。</div>
+        <div id="info-grade" class="instructions" style="display:none;">✍️ <b>【採点モード】</b>: 画面に残ったすべての枠から<b>「一番左上」の枠を自動計算して順番に</b>採点スタート！</div>
+        <div class="image-container-outer">
+            <div class="image-wrapper" id="imageArea">
+                <canvas id="canvas-bg"></canvas>
+                <div id="dragPreview" class="drag-preview-box"></div>
+            </div>
+        </div>
+    </div>
+    <div class="splitter" id="vSplitter"></div>
+    <div class="right-panel" id="rightPanel"><iframe class="pdf-viewer" src="kaitou.pdf#toolbar=1&navpanes=0&scrollbar=1"></iframe></div>
+</div>
+<script>
+    const leftPanel = document.getElementById('leftPanel'), rightPanel = document.getElementById('rightPanel'), splitter = document.getElementById('vSplitter');
+    const imageArea = document.getElementById('imageArea'), canvas = document.getElementById('canvas-bg'), ctx = canvas.getContext('2d'), dragPreview = document.getElementById('dragPreview');
+    let currentMode = 'select', currentIndex = 0, selectedBoxIndex = null, boxElements = [], placedMarks = {};
+    
+    let pointsData = [{"x": 180, "y": 155, "w": 88, "h": 539, "status": "", "haiten": 5}, {"x": 183, "y": 158, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 275, "y": 157, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 322, "y": 151, "w": 544, "h": 542, "status": "", "haiten": 5}, {"x": 325, "y": 154, "w": 498, "h": 517, "status": "", "haiten": 5}, {"x": 881, "y": 158, "w": 109, "h": 215, "status": "", "haiten": 5}, {"x": 884, "y": 160, "w": 40, "h": 211, "status": "", "haiten": 5}, {"x": 924, "y": 160, "w": 63, "h": 210, "status": "", "haiten": 5}, {"x": 88, "y": 335, "w": 87, "h": 360, "status": "", "haiten": 5}, {"x": 91, "y": 337, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 184, "y": 336, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 275, "y": 335, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 823, "y": 331, "w": 40, "h": 160, "status": "", "haiten": 5}, {"x": 132, "y": 377, "w": 40, "h": 78, "status": "", "haiten": 5}, {"x": 132, "y": 476, "w": 40, "h": 78, "status": "", "haiten": 5}, {"x": 92, "y": 516, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 184, "y": 514, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 225, "y": 515, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 276, "y": 514, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 823, "y": 513, "w": 41, "h": 155, "status": "", "haiten": 5}, {"x": 133, "y": 574, "w": 40, "h": 79, "status": "", "haiten": 5}, {"x": 96, "y": 736, "w": 604, "h": 542, "status": "", "haiten": 5}, {"x": 98, "y": 741, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 139, "y": 741, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 180, "y": 741, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 221, "y": 741, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 261, "y": 741, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 344, "y": 739, "w": 312, "h": 516, "status": "", "haiten": 5}, {"x": 702, "y": 733, "w": 168, "h": 541, "status": "", "haiten": 5}, {"x": 785, "y": 767, "w": 40, "h": 114, "status": "", "haiten": 5}, {"x": 433, "y": 836, "w": 172, "h": 322, "status": "", "haiten": 5}, {"x": 786, "y": 882, "w": 40, "h": 66, "status": "", "haiten": 5}, {"x": 99, "y": 920, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 140, "y": 920, "w": 40, "h": 58, "status": "", "haiten": 5}, {"x": 180, "y": 919, "w": 41, "h": 159, "status": "", "haiten": 5}, {"x": 222, "y": 919, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 262, "y": 919, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 303, "y": 919, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 704, "y": 946, "w": 40, "h": 81, "status": "", "haiten": 5}, {"x": 786, "y": 948, "w": 40, "h": 115, "status": "", "haiten": 5}, {"x": 872, "y": 942, "w": 87, "h": 330, "status": "", "haiten": 5}, {"x": 875, "y": 945, "w": 39, "h": 81, "status": "", "haiten": 5}, {"x": 140, "y": 999, "w": 40, "h": 59, "status": "", "haiten": 5}, {"x": 704, "y": 1048, "w": 40, "h": 81, "status": "", "haiten": 5}, {"x": 827, "y": 1047, "w": 40, "h": 82, "status": "", "haiten": 5}, {"x": 875, "y": 1047, "w": 40, "h": 81, "status": "", "haiten": 5}, {"x": 787, "y": 1064, "w": 40, "h": 65, "status": "", "haiten": 5}, {"x": 100, "y": 1098, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 140, "y": 1098, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 181, "y": 1098, "w": 41, "h": 158, "status": "", "haiten": 5}, {"x": 222, "y": 1098, "w": 40, "h": 158, "status": "", "haiten": 5}, {"x": 263, "y": 1098, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 304, "y": 1098, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 657, "y": 1096, "w": 40, "h": 157, "status": "", "haiten": 5}, {"x": 787, "y": 1149, "w": 40, "h": 102, "status": "", "haiten": 5}, {"x": 828, "y": 1149, "w": 39, "h": 102, "status": "", "haiten": 5}, {"x": 875, "y": 1149, "w": 41, "h": 82, "status": "", "haiten": 5}, {"x": 916, "y": 1149, "w": 40, "h": 101, "status": "", "haiten": 5}, {"x": 705, "y": 1150, "w": 40, "h": 82, "status": "", "haiten": 5}]; 
+    let currentW = 1000, currentH = 1422, lastMouseX = 50, lastMouseY = 50;
+
+    imageArea.addEventListener('mousemove', (e) => { const r = imageArea.getBoundingClientRect(); lastMouseX = e.clientX - r.left; lastMouseY = e.clientY - r.top; });
+    let isSplitting = false;
+    splitter.addEventListener('mousedown', () => { isSplitting = true; splitter.classList.add('dragging'); rightPanel.classList.add('shielded'); });
+    document.addEventListener('mousemove', (e) => { if (isSplitting) { let p = (e.clientX / window.innerWidth) * 100; if (p > 20 && p < 80) { leftPanel.style.width = p + 'vw'; splitter.style.left = p + 'vw'; } } });
+    document.addEventListener('mouseup', () => { if (isSplitting) { isSplitting = false; splitter.classList.remove('dragging'); rightPanel.classList.remove('shielded'); } });
+
+    const baseImg = new Image(); baseImg.src = "test_sheet.jpg";
+    baseImg.onload = () => { initCanvas(); };
+    function initCanvas() { canvas.width = currentW; canvas.height = currentH; imageArea.style.width = currentW+'px'; imageArea.style.height = currentH+'px'; ctx.drawImage(baseImg, 0, 0, currentW, currentH); renderBoxes(); }
+
+    function applyHaitenToRemaining() {
+        const targetValue = parseInt(document.getElementById('globalHaitenInput').value) || 0;
+        pointsData.forEach((pt, idx) => {
+            if (selectedBoxIndex === null || selectedBoxIndex !== idx) { pt.haiten = targetValue; }
+        });
+        renderBoxes();
+    }
+
+    // 💡 【大改造】スタンプや合計点数テキストをCanvasに焼き込んで高画質PNGとしてエクスポートする超クリーンなエンジン
+    function downloadScoredImagePNG() {
+        // ダミーの合成用Canvasを一時作成
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = canvas.width;
+        exportCanvas.height = canvas.height;
+        const eCtx = exportCanvas.getContext('2d');
+        
+        // 1. まず現在の背景画像をそのまま転写
+        eCtx.drawImage(canvas, 0, 0);
+        
+        // 2. 画面上のスタンプ（〇・✓・△）を正確な位置に合成
+        const stampElements = imageArea.querySelectorAll('.stamp');
+        let loadedCount = 0;
+        
+        const textElements = imageArea.querySelectorAll('.dynamic-text');
+        
+        function finalizeDownload() {
+            // 3. テキスト（合計点数など）をCanvasのフォントスタイルを合わせて焼き付け
+            textElements.forEach(el => {
+                let lx = parseFloat(el.style.left);
+                let ty = parseFloat(el.style.top);
+                
+                eCtx.font = `${el.style.fontWeight} ${el.style.fontSize} ${el.style.fontFamily}`;
+                eCtx.fillStyle = el.style.color || '#ff0000';
+                eCtx.textAlign = 'center';
+                eCtx.textBaseline = 'middle';
+                eCtx.fillText(el.innerText, lx, ty);
+            });
+            
+            // 4. ダウンロードトリガーを発火
+            const link = document.createElement('a');
+            link.download = 'scored_sheet.png';
+            link.href = exportCanvas.toDataURL('image/png');
+            link.click();
+        }
+        
+        if (stampElements.length === 0) {
+            finalizeDownload();
+            return;
+        }
+        
+        // スタンプ画像のURLを展開して非同期でロード完了を待ってから合成
+        stampElements.forEach(el => {
+            const img = new Image();
+            // bgImageのurl("maru.png") から純粋なパスを抽出
+            let srcUrl = el.style.backgroundImage.replace(/url\(['"]?([^'"]*)['"]?\)/, '$1');
+            img.src = srcUrl;
+            
+            img.onload = () => {
+                let sx = parseFloat(el.style.left) + 6; // スタイルのマイナス補正を戻す
+                let sy = parseFloat(el.style.top);
+                // スタンプを真ん中配置にするため調整
+                eCtx.drawImage(img, sx, sy - 14, 28, 28);
+                loadedCount++;
+                if (loadedCount === stampElements.length) {
+                    finalizeDownload();
+                }
+            };
+            img.onerror = () => {
+                loadedCount++;
+                if (loadedCount === stampElements.length) finalizeDownload();
+            };
+        });
+    }
+
+    function switchMode(mode) {
+        currentMode = mode;
+        document.getElementById('btn-mode-select').classList.toggle('active', mode === 'select');
+        document.getElementById('btn-mode-grade').classList.toggle('active', mode === 'grade');
+        document.getElementById('info-select').style.display = mode === 'select' ? 'block' : 'none';
+        document.getElementById('info-grade').style.display = mode === 'grade' ? 'block' : 'none';
+        
+        if(mode === 'grade') {
+            selectedBoxIndex = null;
+            pointsData.sort((a, b) => {
+                let lineA = Math.floor(a.y / 25);
+                let lineB = Math.floor(b.y / 25);
+                if (lineA !== lineB) return lineA - lineB;
+                return a.x - b.x;
+            });
+            
+            imageArea.querySelectorAll('.stamp, .dynamic-text').forEach(el => el.remove());
+            placedMarks = {};
+            currentIndex = 0;
+            renderBoxes();
+            highlightCurrentBox();
+        } else {
+            selectedBoxIndex = null;
+            renderBoxes();
+        }
+    }
+
+    let isDrawingBox = false, startX = 0, startY = 0;
+    imageArea.addEventListener('mousedown', (e) => {
+        if (currentMode !== 'select' || e.target.className.includes('stamp') || e.target.className.includes('detected-box') || document.activeElement.tagName === 'INPUT') return;
+        isDrawingBox = true; const r = imageArea.getBoundingClientRect(); startX = e.clientX - r.left; startY = e.clientY - r.top;
+        dragPreview.style.left = startX+'px'; dragPreview.style.top = startY+'px'; dragPreview.style.width = '0px'; dragPreview.style.height = '0px'; dragPreview.style.display = 'block';
+    });
+    imageArea.addEventListener('mousemove', (e) => { if (isDrawingBox) { const r = imageArea.getBoundingClientRect(); let w = (e.clientX - r.left) - startX, h = (e.clientY - r.top) - startY; if (w > 0 && h > 0) { dragPreview.style.width = w+'px'; dragPreview.style.height = h+'px'; } } });
+    imageArea.addEventListener('mouseup', (e) => {
+        if (!isDrawingBox) return; isDrawingBox = false; dragPreview.style.display = 'none';
+        const r = imageArea.getBoundingClientRect(); let w = (e.clientX - r.left) - startX, h = (e.clientY - r.top) - startY;
+        if (w > 10 && h > 10) {
+            const defaultValue = parseInt(document.getElementById('globalHaitenInput').value) || 5;
+            pointsData.push({ x: startX, y: startY, w: w, h: h, status: '', haiten: defaultValue });
+            selectedBoxIndex = pointsData.length - 1;
+            renderBoxes();
+        }
+    });
+
+    function renderBoxes() {
+        imageArea.querySelectorAll('.detected-box').forEach(el => el.remove()); boxElements = [];
+        
+        pointsData.forEach((pt, idx) => {
+            const box = document.createElement('div'); box.className = 'detected-box';
+            box.style.left = pt.x+'px'; box.style.top = pt.y+'px'; box.style.width = pt.w+'px'; box.style.height = pt.h+'px';
+            
+            if(currentMode === 'select' && selectedBoxIndex === idx) {
+                box.classList.add('selected-adjust');
+                document.getElementById('globalHaitenInput').value = pt.haiten || 0;
+            }
+            
+            const badge = document.createElement('div'); badge.className = 'haiten-badge'; badge.innerText = (pt.haiten || 0) + '点';
+            box.appendChild(badge);
+            
+            box.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if(currentMode === 'select') { selectedBoxIndex = idx; renderBoxes(); }
+            });
+            
+            imageArea.appendChild(box); boxElements.push(box);
+            if (currentMode === 'grade' && !placedMarks[idx] && pt.status) {
+                createStampElement(pt.x, pt.y + (pt.h / 2), pt.status + '.png', idx);
+            }
+        });
+    }
+
+    function deleteBox(idx) {
+        if (idx === null || idx < 0 || idx >= pointsData.length) return;
+        if (placedMarks[idx]) { placedMarks[idx].remove(); delete placedMarks[idx]; }
+        pointsData.splice(idx, 1);
+        
+        let newPlacedMarks = {};
+        Object.keys(placedMarks).forEach(k => {
+            let ik = parseInt(k);
+            if (ik > idx) newPlacedMarks[ik - 1] = placedMarks[k];
+            else if (ik < idx) newPlacedMarks[ik] = placedMarks[k];
+        });
+        placedMarks = newPlacedMarks;
+        selectedBoxIndex = null;
+        renderBoxes();
+        if (currentMode === 'grade') {
+            if (currentIndex >= pointsData.length) currentIndex = Math.max(0, pointsData.length - 1);
+            highlightCurrentBox();
+        }
+    }
+
+    function calculateTotalScore() {
+        let total = 0;
+        pointsData.forEach(pt => { 
+            let rate = pt.status === 'batsu' ? 0.0 : (pt.status === 'sankaku' ? 0.5 : 1.0); 
+            total += ((pt.haiten || 0) * rate); 
+        }); 
+        return total;
+    }
+
+    window.addEventListener('keydown', function(e) {
+        if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT') return;
+
+        if (e.key.toLowerCase() === 'f') {
+            e.preventDefault();
+            if (currentMode === 'select' && selectedBoxIndex !== null) {
+                deleteBox(selectedBoxIndex);
+            } else if (currentMode === 'grade' && pointsData.length > 0) {
+                deleteBox(currentIndex);
+            }
+            return;
+        }
+
+        if (e.key.toLowerCase() === 't') {
+            e.preventDefault();
+            let tx = lastMouseX; let ty = lastMouseY;
+            if (currentMode === 'grade' && pointsData[currentIndex]) {
+                tx = pointsData[currentIndex].x + (pointsData[currentIndex].w / 2);
+                ty = pointsData[currentIndex].y + (pointsData[currentIndex].h / 2);
+            }
+            createScoreInputAtPos(tx, ty); return;
+        }
+
+        if (currentMode !== 'grade') return;
+        if (currentIndex < 0 || currentIndex >= pointsData.length) return;
+
+        let imgFile = e.key === '1' ? 'maru.png' : (e.key === '2' ? 'batsu.png' : (e.key === '3' ? 'sankaku.png' : ''));
+        if (imgFile !== '') {
+            createStampElement(pointsData[currentIndex].x, pointsData[currentIndex].y + (pointsData[currentIndex].h / 2), imgFile, currentIndex);
+            currentIndex++; highlightCurrentBox();
+        }
+        if (e.key === '0') { currentIndex++; highlightCurrentBox(); }
+    });
+
+    document.getElementById('globalHaitenInput').addEventListener('input', () => {
+        if (currentMode === 'select' && selectedBoxIndex !== null) {
+            pointsData[selectedBoxIndex].haiten = parseInt(document.getElementById('globalHaitenInput').value) || 0;
+            renderBoxes();
+        }
+    });
+
+    function createStampElement(x, y, initialImg, idx) {
+        if (currentMode !== 'grade') return;
+        if (placedMarks[idx]) placedMarks[idx].remove();
+        
+        const stamp = document.createElement('div'); stamp.className = 'stamp'; stamp.style.left = (x - 6)+'px'; stamp.style.top = y+'px';
+        let status = initialImg.replace('.png', ''); stamp.style.backgroundImage = `url('${status}.png')`;
+
+        stamp.addEventListener('mousedown', (e) => {
+            e.stopPropagation(); if (currentMode !== 'grade' || e.button !== 0) return;
+            let sx = e.clientX, sy = e.clientY; startDrag(e, stamp);
+            document.addEventListener('mouseup', function onUp(ev) {
+                if (Math.abs(ev.clientX - sx) < 3 && Math.abs(ev.clientY - sy) < 3) {
+                    status = status === 'maru' ? 'batsu' : (status === 'batsu' ? 'sankaku' : 'maru'); stamp.style.backgroundImage = `url('${status}.png')`;
+                    if(idx !== null && pointsData[idx]) pointsData[idx].status = status;
+                }
+                document.removeEventListener('mouseup', onUp);
+            });
+        });
+        imageArea.appendChild(stamp); if (idx !== null) { placedMarks[idx] = stamp; if(pointsData[idx]) pointsData[idx].status = status; }
+    }
+
+    function createScoreInputAtPos(x, y) {
+        const input = document.createElement('input'); input.type = 'text'; input.className = 'score-input'; input.style.left = x+'px'; input.style.top = y+'px'; input.placeholder = "=tensuu";
+        input.addEventListener('keydown', (e) => {
+            e.stopPropagation(); if (e.key === 'Enter') {
+                let val = input.value.trim();
+                if (val.toLowerCase() === '=tensuu') val = calculateTotalScore();
+                if (val !== "") { const disp = createDynamicTextElement(parseFloat(input.style.left), parseFloat(input.style.top), val); imageArea.appendChild(disp); }
+                input.remove(); if (currentMode === 'grade' && pointsData[currentIndex]) { currentIndex++; highlightCurrentBox(); }
+            }
+        });
+        imageArea.appendChild(input); setTimeout(() => input.focus(), 50);
+    }
+
+    function highlightCurrentBox() {
+        boxElements.forEach(b => b.classList.remove('active-target'));
+        if (currentMode === 'grade' && boxElements[currentIndex]) {
+            boxElements[currentIndex].classList.add('active-target');
+            boxElements[currentIndex].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+    }
+
+    function createDynamicTextElement(x, y, text) {
+        const disp = document.createElement('div'); disp.className = 'dynamic-text'; disp.innerText = text; disp.style.left = x+'px'; disp.style.top = y+'px';
+        disp.style.fontFamily = document.getElementById('txtFont').value;
+        disp.style.fontSize = document.getElementById('txtSize').value + 'px';
+        disp.style.letterSpacing = document.getElementById('txtSpacing').value + 'px';
+        disp.style.color = document.getElementById('txtColor').value;
+        disp.style.fontWeight = document.getElementById('txtBold').checked ? 'bold' : 'normal';
+        disp.addEventListener('mousedown', (e) => { e.stopPropagation(); startDrag(e, disp); });
+        return disp;
+    }
+
+    let activeDragElement = null, dragStartX = 0, dragStartY = 0, initialLeft = 0, initialTop = 0;
+    function startDrag(e, el) { activeDragElement = el; dragStartX = e.clientX; dragStartY = e.clientY; initialLeft = parseFloat(el.style.left); initialTop = parseFloat(el.style.top); document.addEventListener('mousemove', onDrag); document.addEventListener('mouseup', stopDrag); }
+    function onDrag(e) { if (activeDragElement) { activeDragElement.style.left = (initialLeft + (e.clientX - dragStartX))+'px'; activeDragElement.style.top = (initialTop + (e.clientY - dragStartY))+'px'; } }
+    function stopDrag() { document.removeEventListener('mousemove', onDrag); document.removeEventListener('mouseup', stopDrag); activeDragElement = null; }
+
+    function rotateImagePhysical90() {
+        let savedMarks = [];
+        Object.keys(placedMarks).forEach(idx => {
+            const el = placedMarks[idx];
+            if (el) {
+                if (el.classList.contains('stamp')) savedMarks.push({ idx: parseInt(idx), type: 'stamp', content: el.style.backgroundImage.includes('batsu')?'batsu.png':(el.style.backgroundImage.includes('sankaku')?'sankaku.png':'maru.png'), status: pointsData[idx]?.status||'maru' });
+                else if (el.classList.contains('dynamic-text')) savedMarks.push({ idx: parseInt(idx), type: 'text', content: el.innerText });
+            }
+        });
+        imageArea.querySelectorAll('.detected-box, .stamp, .dynamic-text, .score-input').forEach(el => el.remove()); placedMarks = {};
+        const temp = document.createElement('canvas'); temp.width = canvas.width; temp.height = canvas.height; temp.getContext('2d').drawImage(canvas,0,0);
+        let oldW = currentW, oldH = currentH; currentW = oldH; currentH = oldW;
+        canvas.width = currentW; canvas.height = currentH; imageArea.style.width = currentW+'px'; imageArea.style.height = currentH+'px';
+        ctx.translate(currentW/2, currentH/2); ctx.rotate(90*Math.PI/180); ctx.drawImage(temp, -oldW/2, -oldH/2); ctx.setTransform(1,0,0,1,0,0);
+        pointsData = pointsData.map(pt => ({ x: oldH - (pt.y + pt.h), y: pt.x, w: pt.h, h: pt.w, status: pt.status || '', haiten: pt.haiten || 5 }));
+        renderBoxes();
+        savedMarks.forEach(m => {
+            let pt = pointsData[m.idx]; if(!pt) return;
+            if (m.type === 'stamp') { createStampElement(pt.x, pt.y+(pt.h/2), m.content, m.idx); if(pointsData[m.idx]) pointsData[m.idx].status = m.status; }
+            else { const disp = createDynamicTextElement(pt.x+(pt.w/2), pt.y+(pt.h/2), m.content); imageArea.appendChild(disp); placedMarks[m.idx] = disp; }
+        });
+        if(currentMode === 'grade') highlightCurrentBox();
+    }
+</script>
+</body>
+</html>
